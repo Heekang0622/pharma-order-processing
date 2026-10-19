@@ -1,65 +1,65 @@
 # Pharma Order Processing Pipeline (Excel VBA)
 
-A multi-step Excel VBA macro pipeline that automates the weekly order-processing
-workflow for a pharmaceutical import/export operation. Originally built to
-replace a fully manual process of transcribing purchase orders into a
-production-request format.
+An Excel VBA macro pipeline that automates a weekly pharmaceutical import/export order-processing workflow. It replaces manual transcription of purchase orders into the production-request format used by the manufacturer.
 
-> **Note:** This is a sanitized/anonymized version of a production tool used in
-> my actual job. All client names, agency codes, and partner company names have
-> been replaced with generic placeholders (`CLIENT01`–`CLIENT31`, `PARTNER_CO`,
-> etc.). Sheet names have been translated to English. Business logic and
-> structure are preserved as-is.
+> **Note:** This is a sanitized/anonymized version of a tool used in a real workflow. Original client names, agency codes, and partner names have been replaced with generic placeholders (`PARTNER_CO`, `CLIENT01`-`CLIENT31`, etc.), and sheet names have been translated to English. Business logic and structure are preserved as-is. The weekday labels (`일,토,금,목,수,화,월` = Sun-Mon) stay in Korean because they are data values that the sorting depends on.
 
-## Problem
+## Pipeline
 
-Each week, orders arrive from multiple sales channels (international
-distributor orders, domestic direct orders, and a third reconciliation-based
-channel) in inconsistent formats — one row per order line, with a quantity
-column, rather than one row per physical unit needed for the internal
-production-request template. Preparing the production request previously
-required manually expanding, sorting, and grouping hundreds of rows by hand
-every week, including error-prone manual cell merging based on package size
-rules.
+All steps write to one target sheet (`Distribution`). Each step clears its own target range before writing, so every macro can be re-run safely.
 
-## What the pipeline does
+| Step | Macro | Source sheet | What it does |
+|---|---|---|---|
+| 1 | `Step1_AutoFill_Smart_Optimized` | `OrderData_Intl` | Clears the previous data and expands each international order into **one row per unit** |
+| 2 | `Step2_Final_Merge_Resolved` | `Distribution` | Sorts the rows and merges them into **package groups** |
+| 3 | `Step3_Domestic_Only_Final_Fixed` | `OrderData_Domestic` | Appends domestic orders below the international rows, sorted the same way |
+| 4 | `Step4_Solution_Mapping` | `SolutionData` | Maps the third order channel, normalizes client names through a lookup sheet, and sorts |
 
-| Step | Function | What it does |
-|---|---|---|
-| 0 | `Step0_Clear_Columns` | Resets the staging area before a new run |
-| 1 | `Step1_AutoFill_Smart_Optimized` | Expands international-channel order rows (qty column) into one row per unit |
-| 2 | `Step2_Final_Merge_Resolved` | Sorts by dose size → delivery day → client priority, then merges rows into physical "package" groups based on dose-denomination rules, and flags priority clients |
-| 3 | `Step3_Domestic_Only_Final_Fixed` | Same expand/sort logic for the domestic order channel, appended below |
-| 4 | `Step4_Solution_Mapping` | Expands a third order channel, standardizes free-text client names via a lookup table, then sorts |
+The helper `ToggleEvents` switches screen updating, alerts, events, and calculation mode on or off.
+
+### Step 1 - Expand orders to rows
+- Clears the previous run (the old separate "Step 0" is now part of this step): unmerges `L15:P981`, then clears `B:C`, `E:G`, `J`, and `L:Q` from row 15 down.
+- Reads each order row. It accepts two input formats: a single cell holding `Agency Day mCi Qty` separated by spaces, or the same four values in columns A-D.
+- Writes one row per unit of quantity: client (`C`), weekday (`E`), mCi (`F`), and the channel marker `PARTNER_CO` (`J`). Column `D` is filled down from the first row.
+- Stops with a message if the order sheet is empty.
+
+### Step 2 - Sort and merge into packages
+- Finds the last `PARTNER_CO` row and works on `A15:Q` down to it.
+- **Sort order:** mCi descending → weekday (Sun → Mon) → client priority (a fixed list of 31 client codes).
+- **Package rule by dose:** 50, 30, 25, 5 and 2 mCi group 4 rows per package, 100 mCi groups 2 rows, any other dose stays 1 row. A group only forms while weekday and client are identical.
+- For each package it writes the numbering (`No.` plus `=A<row>` references), a merged label such as `1 Package (100mCi)`, and a thin outer border.
+- Rows of the priority client group (`CLIENT26`, `CLIENT30`, `CLIENT18`, `CLIENT27`, `CLIENT17`, `CLIENT_SPECIAL`) are marked pink in column `Q`.
+
+### Step 3 - Domestic orders
+- Starts right below the last `PARTNER_CO` row and clears everything below it first.
+- Expands each domestic order into one row per unit (client, weekday, mCi, and the channel value taken from the domestic sheet).
+- Sorts by mCi descending, then weekday (Sat → Mon), merges `L:P` for each row, and draws borders.
+
+### Step 4 - Solution channel
+- Reads `SolutionData` and writes the rows starting at row 987 of `Distribution`.
+- **Client names are standardized** through the `ClientNameMap` sheet using a wildcard `MATCH`; if no match is found, the original name is kept.
+- Sorts by mCi descending, then weekday (Sat → Mon).
 
 ## Design notes
 
-- **Dynamic row expansion**: quantity-based rows are expanded into individual
-  unit rows via array iteration rather than manual copy/paste, eliminating a
-  common source of quantity errors.
-- **Rule-based merging**: package grouping size (1/2/4 physical units per
-  package) is driven by dose denomination, not manually judged per row.
-- **Custom multi-key sort**: combines a numeric key (dose size), a
-  domain-specific custom day-of-week order, and a client-priority custom order
-  in a single sort operation.
-- **Name normalization**: a separate lookup sheet maps inconsistent
-  free-text client names to standardized display names via fuzzy `MATCH`.
-- **Idempotent staging**: each step explicitly clears/un-merges its target
-  range before writing, so macros can be safely re-run.
+- Row expansion works on arrays and ranges in bulk, with screen updating, alerts, and calculation switched off while running.
+- Package grouping follows the dose-denomination rules above.
+- Name normalization uses a lookup sheet with fuzzy `MATCH`.
+- Each step clears its target range first, so macros can be re-run without duplicating rows.
 
-## Known limitations / next steps
+## How to use
 
-- Business logic is currently split across VBA and manual PDF-reading steps
-  upstream; a Python-based PDF parsing layer (pdfplumber) was later added to
-  reduce upstream transcription errors, with plans to feed structured
-  output directly into this pipeline.
-- The client-priority sort list and package-size mapping are hardcoded;
-  in a next iteration these would move to a config sheet or external file.
-- No automated tests; validation is currently done by comparing generated
-  totals against printed PO totals.
+1. Prepare a workbook with the sheets `OrderData_Intl`, `OrderData_Domestic`, `SolutionData`, `ClientNameMap`, and `Distribution`.
+2. Press `Alt+F11` → File → Import File → select `OrderPipeline_Anonymized.bas`.
+3. Press `Alt+F8` and run the steps in order, 1 → 4.
+
+## Known limitations
+
+- Business logic is split between VBA and manual PDF reading upstream. A Python PDF-parsing layer (pdfplumber) was added to reduce transcription errors.
+- The client priority list and the package-size mapping are hardcoded.
+- Row positions in the target sheet are fixed (data starts at row 15, the solution block at row 987, clear ranges end around row 981), so a very large week would need these limits raised.
+- There are no automated tests. Validation compares totals against the printed PO totals.
 
 ## Stack
 
-Excel VBA (no external dependencies). Designed to run in a locked-down
-corporate environment without local script/interpreter installation
-permissions.
+Excel VBA with no external dependencies, designed for a locked-down corporate environment.
